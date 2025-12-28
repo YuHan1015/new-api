@@ -556,3 +556,53 @@ func (u *ClaudeUsage) GetCacheCreationTotalTokens() int {
 type ClaudeServerToolUse struct {
 	WebSearchRequests int `json:"web_search_requests"`
 }
+
+// ClaudeCountTokensRequest represents the request body for Claude's count_tokens API
+// POST /v1/messages/count_tokens
+type ClaudeCountTokensRequest struct {
+	Model    string          `json:"model"`
+	Messages []ClaudeMessage `json:"messages"`
+	System   any             `json:"system,omitempty"`
+	Tools    any             `json:"tools,omitempty"`
+	Thinking *Thinking       `json:"thinking,omitempty"`
+}
+
+func (c *ClaudeCountTokensRequest) GetTokenCountMeta() *types.TokenCountMeta {
+	// For count_tokens, we don't need to estimate tokens locally
+	// as we're forwarding to the upstream API
+	return &types.TokenCountMeta{
+		TokenType: types.TokenTypeTokenizer,
+	}
+}
+
+func (c *ClaudeCountTokensRequest) IsStream(ctx *gin.Context) bool {
+	return false
+}
+
+func (c *ClaudeCountTokensRequest) SetModelName(modelName string) {
+	if modelName != "" {
+		c.Model = modelName
+	}
+}
+
+func (c *ClaudeCountTokensRequest) IsStringSystem() bool {
+	_, ok := c.System.(string)
+	return ok
+}
+
+func (c *ClaudeCountTokensRequest) GetStringSystem() string {
+	if c.IsStringSystem() {
+		return c.System.(string)
+	}
+	return ""
+}
+
+func (c *ClaudeCountTokensRequest) ParseSystem() []ClaudeMediaMessage {
+	mediaContent, _ := common.Any2Type[[]ClaudeMediaMessage](c.System)
+	return mediaContent
+}
+
+// ClaudeCountTokensResponse represents the response from Claude's count_tokens API
+type ClaudeCountTokensResponse struct {
+	InputTokens int `json:"input_tokens"`
+}

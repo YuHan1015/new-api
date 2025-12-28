@@ -164,3 +164,136 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 	service.PostClaudeConsumeQuota(c, info, usage.(*dto.Usage))
 	return nil
 }
+
+// ClaudeCountTokensHelper handles the Claude count_tokens API endpoint
+// POST /v1/messages/count_tokens
+func ClaudeCountTokensHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
+	info.InitChannelMeta(c)
+
+	countTokensReq, ok := info.Request.(*dto.ClaudeCountTokensRequest)
+	if !ok {
+		return types.NewErrorWithStatusCode(fmt.Errorf("invalid request type, expected *dto.ClaudeCountTokensRequest, got %T", info.Request), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
+
+	request, err := common.DeepCopy(countTokensReq)
+	if err != nil {
+		return types.NewError(fmt.Errorf("failed to copy request to ClaudeCountTokensRequest: %w", err), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	}
+
+	// Apply model mapping
+	err = helper.ModelMappedHelper(c, info, request)
+	if err != nil {
+		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
+	}
+
+	adaptor := GetAdaptor(info.ApiType)
+	if adaptor == nil {
+		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
+	}
+	adaptor.Init(info)
+
+	// Handle thinking adapter for -thinking suffix models
+	if model_setting.GetClaudeSettings().ThinkingAdapterEnabled &&
+		strings.HasSuffix(request.Model, "-thinking") {
+		if !model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) {
+			request.Model = strings.TrimSuffix(request.Model, "-thinking")
+		}
+		info.UpstreamModelName = request.Model
+	}
+
+	// Handle system prompt injection
+	if info.ChannelSetting.SystemPrompt != "" {
+		if request.System == nil {
+			request.System = info.ChannelSetting.SystemPrompt
+		} else if info.ChannelSetting.SystemPromptOverride {
+			common.SetContextKey(c, constant.ContextKeySystemPromptOverride, true)
+			if request.IsStringSystem() {
+				existing := strings.TrimSpace(request.GetStringSystem())
+				if existing == "" {
+					request.System = info.ChannelSetting.SystemPrompt
+				} else {
+					request.System = info.ChannelSetting.SystemPrompt + "\n" + existing
+				}
+			} else {
+				systemContents := request.ParseSystem()
+				newSystem := dto.ClaudeMediaMessage{Type: dto.ContentTypeText}
+				newSystem.SetText(info.ChannelSetting.SystemPrompt)
+				if len(systemContents) == 0 {
+					request.System = []dto.ClaudeMediaMessage{newSystem}
+				} else {
+					request.System = append([]dto.ClaudeMediaMessage{newSystem}, systemContents...)
+				}
+			}
+		}
+	}
+
+	// Build request body
+	var requestBody io.Reader
+	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
+		body, err := common.GetRequestBody(c)
+		if err != nil {
+			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+		requestBody = bytes.NewBuffer(body)
+	} else {
+		jsonData, err := common.Marshal(request)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+
+		// remove disabled fields for Claude API
+		jsonData, err = relaycommon.RemoveDisabledFields(jsonData, info.ChannelOtherSettings)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+
+		// apply param override
+		if len(info.ParamOverride) > 0 {
+			jsonData, err = relaycommon.ApplyParamOverride(jsonData, info.ParamOverride, relaycommon.BuildParamOverrideContext(info))
+			if err != nil {
+				return types.NewError(err, types.ErrorCodeChannelParamOverrideInvalid, types.ErrOptionWithSkipRetry())
+			}
+		}
+
+		if common.DebugEnabled {
+			println("count_tokens requestBody: ", string(jsonData))
+		}
+		requestBody = bytes.NewBuffer(jsonData)
+	}
+
+	// Set the count_tokens endpoint flag
+	info.IsCountTokens = true
+
+	statusCodeMappingStr := c.GetString("status_code_mapping")
+	var httpResp *http.Response
+	resp, err := adaptor.DoRequest(c, info, requestBody)
+	if err != nil {
+		return types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
+	}
+
+	if resp != nil {
+		httpResp = resp.(*http.Response)
+		if httpResp.StatusCode != http.StatusOK {
+			newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
+			service.ResetStatusCode(newAPIError, statusCodeMappingStr)
+			return newAPIError
+		}
+	}
+
+	// Read and return the response directly
+	defer httpResp.Body.Close()
+	responseBody, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		return types.NewError(err, types.ErrorCodeReadResponseBodyFailed, types.ErrOptionWithSkipRetry())
+	}
+
+	// Parse response to validate it
+	var countTokensResp dto.ClaudeCountTokensResponse
+	if err := common.Unmarshal(responseBody, &countTokensResp); err != nil {
+		return types.NewError(err, types.ErrorCodeReadResponseBodyFailed, types.ErrOptionWithSkipRetry())
+	}
+
+	// Return the response to client
+	c.Data(http.StatusOK, "application/json", responseBody)
+	return nil
+}

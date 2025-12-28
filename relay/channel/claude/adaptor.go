@@ -54,7 +54,9 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	baseURL := ""
-	if a.RequestMode == RequestModeMessage {
+	if info.IsCountTokens {
+		baseURL = fmt.Sprintf("%s/v1/messages/count_tokens", info.ChannelBaseUrl)
+	} else if a.RequestMode == RequestModeMessage {
 		baseURL = fmt.Sprintf("%s/v1/messages", info.ChannelBaseUrl)
 	} else {
 		baseURL = fmt.Sprintf("%s/v1/complete", info.ChannelBaseUrl)

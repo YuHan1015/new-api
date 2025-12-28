@@ -32,6 +32,8 @@ func GetAndValidateRequest(c *gin.Context, format types.RelayFormat) (request dt
 		}
 	case types.RelayFormatClaude:
 		request, err = GetAndValidateClaudeRequest(c)
+	case types.RelayFormatClaudeCountTokens:
+		request, err = GetAndValidateClaudeCountTokensRequest(c)
 	case types.RelayFormatOpenAIResponses:
 		request, err = GetAndValidateResponsesRequest(c)
 
@@ -231,6 +233,21 @@ func GetAndValidateClaudeRequest(c *gin.Context) (textRequest *dto.ClaudeRequest
 	//}
 
 	return textRequest, nil
+}
+
+func GetAndValidateClaudeCountTokensRequest(c *gin.Context) (request *dto.ClaudeCountTokensRequest, err error) {
+	request = &dto.ClaudeCountTokensRequest{}
+	err = c.ShouldBindJSON(request)
+	if err != nil {
+		return nil, err
+	}
+	if request.Messages == nil || len(request.Messages) == 0 {
+		return nil, errors.New("field messages is required")
+	}
+	if request.Model == "" {
+		return nil, errors.New("field model is required")
+	}
+	return request, nil
 }
 
 func GetAndValidateTextRequest(c *gin.Context, relayMode int) (*dto.GeneralOpenAIRequest, error) {

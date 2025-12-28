@@ -77,6 +77,10 @@ func SetRelayRouter(router *gin.Engine) {
 		httpRouter.Use(middleware.Distribute())
 
 		// claude related routes
+		// Note: count_tokens must be registered before /messages to avoid being matched by /messages
+		httpRouter.POST("/messages/count_tokens", func(c *gin.Context) {
+			controller.Relay(c, types.RelayFormatClaudeCountTokens)
+		})
 		httpRouter.POST("/messages", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatClaude)
 		})
